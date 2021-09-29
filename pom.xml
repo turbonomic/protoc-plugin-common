@@ -21,7 +21,7 @@
         <google.common.protos.version>1.9.0</google.common.protos.version>
         <log4j2.Version>2.8.2</log4j2.Version>
         <protobuf.version>3.5.1</protobuf.version>
-        <guava.version>29.0-jre</guava.version>
+        <guava.version>30.0-jre</guava.version>
         <google.findbugs.version>2.0.3</google.findbugs.version>
         <commons-lang3.version>3.6</commons-lang3.version>
         <st4.version>4.0.8</st4.version>
