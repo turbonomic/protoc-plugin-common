@@ -13,11 +13,10 @@ package com.turbonomic.protoc.plugin.common.generator;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import javax.annotation.Nonnull;
 import javax.annotation.concurrent.Immutable;
-
-import org.apache.commons.lang3.StringUtils;
 
 import com.turbonomic.protoc.plugin.common.generator.FileDescriptorProcessingContext.OuterClass;
 
@@ -51,7 +50,7 @@ public abstract class AbstractDescriptor {
      * Only non-empty for nested {@link MessageDescriptor} and {@link EnumDescriptor}
      * definitions.
      */
-    private final List<String> outerMessages;
+    protected final List<String> outerMessages;
 
     protected AbstractDescriptor(@Nonnull final FileDescriptorProcessingContext context,
                               @Nonnull final String name) {
@@ -103,11 +102,13 @@ public abstract class AbstractDescriptor {
      *         outer class.
      */
     @Nonnull
-    public String getNameWithinOuterClass() {
+    public String getNameWithinOuterClass(@Nonnull final TypeNameFormatter formatter) {
         if (outerMessages == null || outerMessages.isEmpty()) {
-            return name;
+            return formatter.formatTypeName(name);
         } else {
-            return StringUtils.join(outerMessages, ".") + "." + name;
+            return outerMessages.stream()
+                .map(formatter::formatTypeName)
+                .collect(Collectors.joining(".")) + "." + formatter.formatTypeName(name);
         }
     }
 
@@ -118,8 +119,8 @@ public abstract class AbstractDescriptor {
      * @return The name.
      */
     @Nonnull
-    public String getQualifiedName() {
-        return javaPkgName + "." + outerClass.getPluginJavaClass() + "." + getNameWithinOuterClass();
+    public String getQualifiedName(@Nonnull final TypeNameFormatter formatter) {
+        return javaPkgName + "." + outerClass.getPluginJavaClass() + "." + getNameWithinOuterClass(formatter);
     }
 
     @Nonnull
@@ -139,9 +140,10 @@ public abstract class AbstractDescriptor {
         // If multiple files is enabled, the protobuf compiler will NOT nest the classes for
         // messages in an outer class.
         if (outerClass.isMultipleFilesEnabled()) {
-            return javaPkgName + "." + getNameWithinOuterClass();
+            return javaPkgName + "." + getNameWithinOuterClass(TypeNameFormatter.IDENTITY);
         } else {
-            return javaPkgName + "." + outerClass.getProtoJavaClass() + "." + getNameWithinOuterClass();
+            return javaPkgName + "." + outerClass.getProtoJavaClass() + "."
+                + getNameWithinOuterClass(TypeNameFormatter.IDENTITY);
         }
     }
 
@@ -153,6 +155,6 @@ public abstract class AbstractDescriptor {
      */
     @Nonnull
     public String getQualifiedProtoName() {
-        return protoPkgName + "." + getNameWithinOuterClass();
+        return protoPkgName + "." + getNameWithinOuterClass(TypeNameFormatter.IDENTITY);
     }
 }

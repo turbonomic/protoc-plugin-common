@@ -14,13 +14,16 @@ package com.turbonomic.protoc.plugin.common.generator;
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
 import javax.annotation.Nonnull;
-
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
+import javax.annotation.Nullable;
 
 import com.google.api.AnnotationsProto;
 import com.google.protobuf.DescriptorProtos.DescriptorProto;
@@ -31,6 +34,12 @@ import com.google.protobuf.ExtensionRegistry;
 import com.google.protobuf.compiler.PluginProtos.CodeGeneratorRequest;
 import com.google.protobuf.compiler.PluginProtos.CodeGeneratorResponse;
 import com.google.protobuf.compiler.PluginProtos.CodeGeneratorResponse.File;
+
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
+import com.turbonomic.protoc.plugin.common.generator.TypeNameFormatter.IdentityTypeNameFormatter;
 
 /**
  * This is the central class that does the heavy lifting of:
@@ -59,7 +68,7 @@ public abstract class ProtocPluginCodeGenerator {
      * @return The name of the plugin.
      */
     @Nonnull
-    protected abstract String getPluginName();
+    public abstract String getPluginName();
 
     /**
      * This method should return the name of the plugin's outer Java class for a particular file,
@@ -124,6 +133,33 @@ public abstract class ProtocPluginCodeGenerator {
     }
 
     /**
+     * Generate the Java code for a particular oneof parent.
+     *
+     * @param oneOfDescriptor The {@link OneOfDescriptor} for a oneof defined in the .proto file.
+     *                        Note that this is the oneOf parent, and not the individual oneOf variants.
+     *                        The oneOf variants have their own message descriptors that are processed
+     *                        independently.
+     * @return An {@link Optional} containing a string of Java code generated from the input descriptor.
+     *         An empty {@link Optional} if this particular plugin doesn't want to generate anything based
+     *         on services.
+     */
+    protected Optional<String> generateOneOfCode(@Nonnull final OneOfDescriptor oneOfDescriptor) {
+        return Optional.empty();
+    }
+
+    /**
+     * Generate miscellaneous extra files not associated with any particular proto file.
+     * This can be used to, for example, declare an interface only one time that may be shared
+     * by multiple generated files.
+     *
+     * @return The list of miscellaneous files to be add to the list of generated files.
+     */
+    @Nonnull
+    protected List<File> generateMiscellaneousFiles() {
+        return Collections.emptyList();
+    }
+
+    /**
      * Whether or not to skip generating code for a particular file.
      * Some plugins may only want to generate code for specific files (e.g. files with services
      * defined in them). This method provides a way to do that.
@@ -138,14 +174,34 @@ public abstract class ProtocPluginCodeGenerator {
         return false;
     }
 
+    /**
+     * Get the data source for the protobuf files to read.
+     *
+     * @return The input stream source.
+     */
+    public InputStream inputStreamSource() {
+        return System.in;
+    }
+
+    /**
+     * The output stream for the Java source files generated.
+     *
+     * @return The output stream sink.
+     */
+    public OutputStream outputStreamSink() {
+        return System.out;
+    }
+
     @Nonnull
-    protected final Optional<String> generateCode(@Nonnull final AbstractDescriptor abstractDescriptor) {
+    public final Optional<String> generateCode(@Nonnull final AbstractDescriptor abstractDescriptor) {
         if (abstractDescriptor instanceof EnumDescriptor) {
             return generateEnumCode((EnumDescriptor)abstractDescriptor);
         } else if (abstractDescriptor instanceof MessageDescriptor) {
-            return generateMessageCode((MessageDescriptor) abstractDescriptor);
+            return generateMessageCode((MessageDescriptor)abstractDescriptor);
         } else if (abstractDescriptor instanceof ServiceDescriptor) {
-            return generateServiceCode((ServiceDescriptor) abstractDescriptor);
+            return generateServiceCode((ServiceDescriptor)abstractDescriptor);
+        } else if (abstractDescriptor instanceof OneOfDescriptor) {
+            return generateOneOfCode((OneOfDescriptor)abstractDescriptor);
         } else {
             throw new IllegalArgumentException("Unsupported abstract descriptor of class " +
                     abstractDescriptor.getClass().getName());
@@ -159,44 +215,87 @@ public abstract class ProtocPluginCodeGenerator {
      * 2) Generate code and format a {@link CodeGeneratorResponse}.
      * 3) Write the response to stdout.
      *
-     * @throws IOException If there is an issue with reading/writing from/to stdin/stdout.
+     * @throws IOException If there is an issue with reading/writing from/to input/output streams.
      */
     public final void generate() throws IOException {
         final ExtensionRegistry extensionRegistry = ExtensionRegistry.newInstance();
         extensionRegistry.add(AnnotationsProto.http);
 
         final CodeGeneratorRequest req =
-                CodeGeneratorRequest.parseFrom(new BufferedInputStream(System.in), extensionRegistry);
+                CodeGeneratorRequest.parseFrom(new BufferedInputStream(inputStreamSource()), extensionRegistry);
+        final AtomicReference<String> maximalSubpackage = new AtomicReference<>();
+        req.getProtoFileList()
+            .forEach(file -> updateMaximalSubPackage(file, maximalSubpackage));
+
         // The request presents the proto file descriptors in topological order
         // w.r.t. dependencies - i.e. the dependencies appear before the dependents.
         // This means we can process one file at a time without a separate linking step,
         // as long as we record the processed messages in the registry.
-        final CodeGeneratorResponse response = CodeGeneratorResponse.newBuilder()
+        final CodeGeneratorResponse.Builder response = CodeGeneratorResponse.newBuilder()
                 .addAllFile(req.getProtoFileList().stream()
-                        .map(this::generateFile)
+                        .map(file -> generateFile(file, maximalSubpackage.get()))
                         .filter(Optional::isPresent)
                         .map(Optional::get)
-                        .collect(Collectors.toList()))
-                .build();
+                        .collect(Collectors.toList()));
 
-        final BufferedOutputStream outputStream = new BufferedOutputStream(System.out);
-        response.writeTo(outputStream);
+        // Add all miscellaneous files as well.
+        response.addAllFile(generateMiscellaneousFiles());
+
+        final BufferedOutputStream outputStream = new BufferedOutputStream(outputStreamSink());
+        response.build().writeTo(outputStream);
         outputStream.flush();
     }
 
+    private void updateMaximalSubPackage(@Nonnull final FileDescriptorProto file,
+                                         @Nonnull final AtomicReference<String> maximalSubpackage) {
+        final String curMax = maximalSubpackage.get();
+        if (file.getOptions().hasJavaPackage()) {
+            maximalSubpackage.set(computeMaximalSubpackage(curMax, file.getOptions().getJavaPackage()));
+        } else if (file.hasPackage()) {
+            maximalSubpackage.set(computeMaximalSubpackage(curMax, file.getPackage()));
+        }
+
+        if (maximalSubpackage.get() != null && maximalSubpackage.get().endsWith(".")) {
+            maximalSubpackage.set(StringUtils.removeEnd(maximalSubpackage.get(), "."));
+        }
+    }
+
+    private String computeMaximalSubpackage(@Nullable String curMax, @Nonnull final String nextPackage) {
+        return curMax == null
+            ? nextPackage
+            : StringUtils.getCommonPrefix(curMax, nextPackage);
+    }
+
+    /**
+     * Generate a {@link FileDescriptorProcessingContext} for use in processing proto files.
+     *
+     * @param registry The registry to pass to the processing context.
+     * @param fileDescriptorProto The proto for the file to process.
+     * @param maximalSubpackage The maximal Java subpackage shared by all files to be processed.
+     * @return a {@link FileDescriptorProcessingContext} for use in processing proto files.
+     */
     @Nonnull
-    private Optional<File> generateFile(@Nonnull final FileDescriptorProto fileDescriptorProto) {
+    protected FileDescriptorProcessingContext createFileDescriptorProcessingContext(
+        @Nonnull final Registry registry, @Nonnull final FileDescriptorProto fileDescriptorProto,
+        @Nullable String maximalSubpackage) {
+        return new FileDescriptorProcessingContext(this, registry, fileDescriptorProto,
+            new IdentityTypeNameFormatter());
+    }
+
+    @Nonnull
+    private Optional<File> generateFile(@Nonnull final FileDescriptorProto fileDescriptorProto,
+                                        @Nullable final String maximalSubpackage) {
         logger.info("Registering messages in file: {} in package: {}",
                 fileDescriptorProto.getName(),
                 fileDescriptorProto.getPackage());
 
         final FileDescriptorProcessingContext context =
-                new FileDescriptorProcessingContext(this, registry, fileDescriptorProto);
+            createFileDescriptorProcessingContext(registry, fileDescriptorProto, maximalSubpackage);
         context.startEnumList();
         for (int enumIdx = 0; enumIdx < fileDescriptorProto.getEnumTypeCount(); ++enumIdx) {
             context.startListElement(enumIdx);
             final EnumDescriptorProto enumDescriptor = fileDescriptorProto.getEnumType(enumIdx);
-            registry.registerEnum(context, enumDescriptor);
+            registry.registerEnum(context, enumDescriptor, context.getTypeNameFormatter());
             context.endListElement();
         }
         context.endEnumList();
@@ -214,7 +313,7 @@ public abstract class ProtocPluginCodeGenerator {
         for (int svcIdx = 0; svcIdx < fileDescriptorProto.getServiceCount(); ++svcIdx) {
             context.startListElement(svcIdx);
             final ServiceDescriptorProto svcDescriptor = fileDescriptorProto.getService(svcIdx);
-            registry.registerService(context, svcDescriptor);
+            registry.registerService(context, svcDescriptor, context.getTypeNameFormatter());
             context.endListElement();
         }
         context.endServiceList();

@@ -16,9 +16,12 @@ import java.util.Collection;
 import javax.annotation.Nonnull;
 import javax.annotation.concurrent.Immutable;
 
+import com.google.api.AnnotationsProto;
 import com.google.common.collect.ImmutableMap;
 import com.google.protobuf.DescriptorProtos.MethodDescriptorProto;
 import com.google.protobuf.DescriptorProtos.ServiceDescriptorProto;
+import com.google.protobuf.ExtensionRegistry;
+import com.google.protobuf.TextFormat;
 
 @Immutable
 public class ServiceDescriptor extends AbstractDescriptor {

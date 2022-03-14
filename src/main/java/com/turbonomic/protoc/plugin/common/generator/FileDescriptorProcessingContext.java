@@ -22,10 +22,6 @@ import java.util.stream.Collectors;
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
-import org.apache.commons.lang3.StringUtils;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-
 import com.google.common.base.CaseFormat;
 import com.google.googlejavaformat.java.Formatter;
 import com.google.googlejavaformat.java.FormatterException;
@@ -37,15 +33,19 @@ import com.google.protobuf.DescriptorProtos.SourceCodeInfo;
 import com.google.protobuf.DescriptorProtos.SourceCodeInfo.Location;
 import com.google.protobuf.compiler.PluginProtos.CodeGeneratorResponse.File;
 
+import org.apache.commons.lang3.StringUtils;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 /**
  * This object keeps common information and state about
  * the traversal of a single {@link FileDescriptorProto}.
  */
-class FileDescriptorProcessingContext {
+public class FileDescriptorProcessingContext {
 
-    private static final Logger logger = LogManager.getLogger();
+    protected static final Logger logger = LogManager.getLogger();
 
-    static final String EMPTY_COMMENT = "\"\"";
+    protected static final String EMPTY_COMMENT = "\"\"";
 
     /**
      * The value for "syntax" that indicates proto3 syntax.
@@ -54,7 +54,7 @@ class FileDescriptorProcessingContext {
     static final String PROTO_3_SYNTAX = "proto3";
 
     // START - Common, immutable information
-    private final Registry registry;
+    protected final Registry registry;
 
 
     /**
@@ -67,7 +67,7 @@ class FileDescriptorProcessingContext {
      * option java_package = "com.vmturbo.testPkg";
      *
      */
-    private final String protoPkg;
+    protected final String protoPkg;
 
     /**
      * The Java package for the {@link FileDescriptorProto}.
@@ -81,27 +81,27 @@ class FileDescriptorProcessingContext {
      * If we there is no java_package option in the proto file
      * then this is equivalent to {@link FileDescriptorProcessingContext#protoPkg}.
      */
-    private final String javaPkg;
+    protected final String javaPkg;
 
     /**
      * The outer class to use for all generated code.
      */
-    private final OuterClass outerClass;
+    protected final OuterClass outerClass;
 
     /**
      * The comments extracted from the {@link FileDescriptorProto}, indexed by path.
      */
-    private final Map<List<Integer>, String> commentsByPath;
+    protected final Map<List<Integer>, String> commentsByPath;
 
     /**
      * The {@link FileDescriptorProto} this context applies to.
      */
-    private final FileDescriptorProto fileDescriptorProto;
+    protected final FileDescriptorProto fileDescriptorProto;
 
     /**
      * Whether this file uses proto3 syntax.
      */
-    private final boolean proto3Syntax;
+    protected final boolean proto3Syntax;
 
     // END - Common, immutable information
 
@@ -113,20 +113,24 @@ class FileDescriptorProcessingContext {
      * responsible for managing this path via the various
      * path-related methods (e.g. {@link FileDescriptorProcessingContext#startMessageList()}).
      */
-    private final LinkedList<Integer> curPath = new LinkedList<>();
+    protected final LinkedList<Integer> curPath = new LinkedList<>();
 
     /**
      * Non-empty in nested messages. This is the list of outer messages.
      */
-    private final LinkedList<String> outers = new LinkedList<>();
+    protected final LinkedList<String> outers = new LinkedList<>();
 
     // END - State during traversal.
 
-    private final ProtocPluginCodeGenerator generator;
+    protected final ProtocPluginCodeGenerator generator;
+
+
+    protected final TypeNameFormatter typeNameFormatter;
 
     public FileDescriptorProcessingContext(@Nonnull final ProtocPluginCodeGenerator generator,
                                            @Nonnull final Registry registry,
-                                           @Nonnull final FileDescriptorProto fileDescriptorProto) {
+                                           @Nonnull final FileDescriptorProto fileDescriptorProto,
+                                           @Nonnull final TypeNameFormatter typeNameFormatter) {
         this.generator = generator;
         this.fileDescriptorProto = fileDescriptorProto;
         this.registry = registry;
@@ -135,6 +139,7 @@ class FileDescriptorProcessingContext {
         this.outerClass = new OuterClass(generator, fileDescriptorProto);
         // Anything other than the proto3 syntax is treated as not-proto-3.
         this.proto3Syntax = fileDescriptorProto.getSyntax().equals(PROTO_3_SYNTAX);
+        this.typeNameFormatter = typeNameFormatter;
         // Create map of comments in this file. Need this to annotate
         // da fields with da comments.
         this.commentsByPath = Collections.unmodifiableMap(
@@ -164,46 +169,11 @@ class FileDescriptorProcessingContext {
 
     @Nonnull
     public File generateFile() {
-
-        final String generatedFile = Templates.file()
-                .add("pluginName", generator.getPluginName())
-                .add("imports", generator.generateImports())
-                .add("protoSourceName", fileDescriptorProto.getName())
-                .add("pkgName", javaPkg)
-                .add("outerClassName", outerClass.getPluginJavaClass())
-                .add("messageCode", fileDescriptorProto.getMessageTypeList().stream()
-                        .map(message -> registry.getMessageDescriptor(message.getName()))
-                        .map(generator::generateCode)
-                        .filter(Optional::isPresent)
-                        .map(Optional::get)
-                        .collect(Collectors.toList()))
-                .add("enumCode", fileDescriptorProto.getEnumTypeList().stream()
-                        .map(message -> registry.getMessageDescriptor(message.getName()))
-                        .map(generator::generateCode)
-                        .filter(Optional::isPresent)
-                        .map(Optional::get)
-                        .collect(Collectors.toList()))
-                .add("serviceCode", fileDescriptorProto.getServiceList().stream()
-                        .map(message -> registry.getMessageDescriptor(message.getName()))
-                        .map(generator::generateCode)
-                        .filter(Optional::isPresent)
-                        .map(Optional::get)
-                        .collect(Collectors.toList()))
-                .render();
-
-        // Run the formatter to pretty-print the code.
-        logger.info("Running formatter...");
-
-        try {
-            final String formattedContent = new Formatter().formatSource(generatedFile);
-            return File.newBuilder()
-                    .setName(javaPkg.replace('.','/') + "/" + outerClass.getPluginJavaClass() + ".java")
-                    .setContent(formattedContent)
-                    .build();
-        } catch (FormatterException e) {
-            throw new RuntimeException("Got error " + e.getMessage() + " when formatting content:\n" + generatedFile, e);
-        }
-
+        final String content = generateFileContents();
+        return File.newBuilder()
+            .setName(javaPkg.replace('.', '/') + "/" + outerClass.getPluginJavaClass() + ".java")
+            .setContent(content)
+            .build();
     }
 
     @Nonnull
@@ -228,6 +198,49 @@ class FileDescriptorProcessingContext {
 
     public boolean isProto3Syntax() {
         return proto3Syntax;
+    }
+
+    @Nonnull
+    public TypeNameFormatter getTypeNameFormatter() {
+        return typeNameFormatter;
+    }
+
+    @Nonnull
+    protected String generateFileContents() {
+        final String generatedFile = Templates.file()
+            .add("pluginName", generator.getPluginName())
+            .add("imports", generator.generateImports())
+            .add("protoSourceName", fileDescriptorProto.getName())
+            .add("pkgName", javaPkg)
+            .add("outerClassName", outerClass.getPluginJavaClass())
+            .add("messageCode", fileDescriptorProto.getMessageTypeList().stream()
+                .map(message -> registry.getMessageDescriptor(message.getName()))
+                .map(generator::generateCode)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toList()))
+            .add("enumCode", fileDescriptorProto.getEnumTypeList().stream()
+                .map(message -> registry.getMessageDescriptor(message.getName()))
+                .map(generator::generateCode)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toList()))
+            .add("serviceCode", fileDescriptorProto.getServiceList().stream()
+                .map(message -> registry.getMessageDescriptor(message.getName()))
+                .map(generator::generateCode)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.toList()))
+            .render();
+
+        // Run the formatter to pretty-print the code.
+        logger.info("Running formatter...");
+
+        try {
+            return new Formatter().formatSource(generatedFile);
+        } catch (FormatterException e) {
+            throw new RuntimeException("Got error " + e.getMessage() + " when formatting content:\n" + generatedFile, e);
+        }
     }
 
     /**
@@ -370,6 +383,15 @@ class FileDescriptorProcessingContext {
         removeFromPath();
     }
 
+    public void startNestedOneOfList(String outerName) {
+        addToPath(DescriptorProto.ONEOF_DECL_FIELD_NUMBER);
+        outers.add(outerName);
+    }
+
+    public void endNestedOneOfList() {
+        outers.removeLast();
+        removeFromPath();
+    }
 
     public void startListElement(int idx) {
         addToPath(idx);
