@@ -20,7 +20,7 @@
         <google.java.format.version>1.1</google.java.format.version>
         <google.common.protos.version>1.9.0</google.common.protos.version>
         <log4j2.Version>2.8.2</log4j2.Version>
-        <protobuf.version>3.16.1</protobuf.version>
+        <protobuf.version>3.16.3</protobuf.version>
         <guava.version>30.0-jre</guava.version>
         <google.findbugs.version>2.0.3</google.findbugs.version>
         <commons-lang3.version>3.6</commons-lang3.version>
