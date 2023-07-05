@@ -26,7 +26,7 @@
         <commons-lang3.version>3.6</commons-lang3.version>
         <st4.version>4.0.8</st4.version>
         <junit.version>4.13.1</junit.version>
-        <grpc.version>1.11.0</grpc.version>
+        <grpc.version>1.53.0</grpc.version>
         <mockito.version>1.10.19</mockito.version>
     </properties>
 
